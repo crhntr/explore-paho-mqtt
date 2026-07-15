@@ -39,8 +39,8 @@ func TestProxy_Add(t *testing.T) {
 		if len(created) != 1 {
 			t.Fatalf("clients created = %d, want 1", len(created))
 		}
-		if created[0].connectCalls != 1 {
-			t.Errorf("Connect calls = %d, want 1", created[0].connectCalls)
+		if created[0].ConnectCallCount() != 1 {
+			t.Errorf("Connect calls = %d, want 1", created[0].ConnectCallCount())
 		}
 		got := maps.Collect(p.Clients())
 		if len(got) != 1 || got["client-a"] != mqtt.Client(created[0]) {
@@ -63,8 +63,8 @@ func TestProxy_Add(t *testing.T) {
 		if len(created) != 2 {
 			t.Fatalf("clients created = %d, want 2", len(created))
 		}
-		if created[0].disconnectCount() != 1 {
-			t.Errorf("replaced client Disconnect calls = %d, want 1", created[0].disconnectCount())
+		if created[0].DisconnectCallCount() != 1 {
+			t.Errorf("replaced client Disconnect calls = %d, want 1", created[0].DisconnectCallCount())
 		}
 		got := maps.Collect(p.Clients())
 		if len(got) != 1 || got["client-a"] != mqtt.Client(created[1]) {
@@ -96,7 +96,7 @@ func TestProxy_Add(t *testing.T) {
 		if got := p.Remove("client-a"); !got {
 			t.Errorf(`Remove("client-a") = %t, want true`, got)
 		}
-		if got := recorder.clients()[0].disconnectCount(); got != 1 {
+		if got := recorder.clients()[0].DisconnectCallCount(); got != 1 {
 			t.Errorf("removed client Disconnect calls = %d, want 1", got)
 		}
 		if got := maps.Collect(p.Clients()); len(got) != 0 {
@@ -186,8 +186,8 @@ func TestProxy_Add(t *testing.T) {
 		if len(created) != 1 {
 			t.Fatalf("clients created = %d, want 1", len(created))
 		}
-		if created[0].disconnectCount() != 1 {
-			t.Errorf("abandoned client Disconnect calls = %d, want 1", created[0].disconnectCount())
+		if created[0].DisconnectCallCount() != 1 {
+			t.Errorf("abandoned client Disconnect calls = %d, want 1", created[0].DisconnectCallCount())
 		}
 	})
 }
