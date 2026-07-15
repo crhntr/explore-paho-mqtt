@@ -1,0 +1,6 @@
+services:
+  broker-01:
+    image: eclipse-mosquitto:openssl
+    ports:
+      - "1883:1883"
+
