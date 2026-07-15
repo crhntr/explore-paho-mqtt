@@ -100,7 +100,14 @@ func (p *Proxy) remove(clientID string, client mqtt.Client) {
 
 // Remove disconnects the client with the given id and reports whether it existed.
 func (p *Proxy) Remove(clientID string) bool {
-	panic("not implemented")
+	p.mu.Lock()
+	client, ok := p.clients[clientID]
+	delete(p.clients, clientID)
+	p.mu.Unlock()
+	if ok {
+		client.Disconnect(disconnectQuiesce)
+	}
+	return ok
 }
 
 // Clients iterates over a snapshot of the pooled clients keyed by client id.
