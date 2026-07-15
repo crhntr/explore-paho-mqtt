@@ -24,6 +24,11 @@ type Handlers struct {
 // Proxy is a dynamic pool of MQTT clients keyed by client id.
 type Proxy struct{}
 
+// newProxy constructs a Proxy with an injectable client constructor for tests.
+func newProxy(handlers Handlers, newClient func(*mqtt.ClientOptions) mqtt.Client) *Proxy {
+	panic("not implemented")
+}
+
 // New creates a Proxy and adds each of the given client options.
 func New(ctx context.Context, handlers Handlers, options ...*mqtt.ClientOptions) (*Proxy, error) {
 	p := &Proxy{}
