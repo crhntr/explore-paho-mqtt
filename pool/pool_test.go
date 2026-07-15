@@ -5,8 +5,11 @@ import (
 	"errors"
 	"maps"
 	"testing"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+
+	"github.com/crhntr/explore-paho-mqtt/internal/fake"
 )
 
 //go:generate counterfeiter -generate
@@ -167,6 +170,41 @@ func TestProxy_Add(t *testing.T) {
 		options.OnConnectionLost(client, errors.New("connection reset"))
 		options.OnReconnecting(client, options)
 		options.DefaultPublishHandler(client, nil)
+	})
+
+	t.Run("default options can be overridden and added", func(t *testing.T) {
+		onConnect := 0
+		recorder := &clientRecorder{}
+		p := newProxy(Handlers{OnConnect: func(mqtt.Client) { onConnect++ }}, recorder.newClient)
+
+		options := p.Default()
+
+		if !options.ConnectRetry {
+			t.Error("Default().ConnectRetry = false, want true")
+		}
+		if !options.AutoReconnect {
+			t.Error("Default().AutoReconnect = false, want true")
+		}
+		if options.ConnectRetryInterval != time.Second {
+			t.Errorf("Default().ConnectRetryInterval = %v, want %v", options.ConnectRetryInterval, time.Second)
+		}
+		if options.OnConnectionLost == nil || options.OnReconnecting == nil || options.DefaultPublishHandler == nil {
+			t.Error("Default() left a proxy handler unset, want all handlers installed")
+		}
+		if options.OnConnect == nil {
+			t.Fatal("Default().OnConnect = nil, want the proxy handler installed")
+		}
+		options.OnConnect(&fake.Client{})
+		if onConnect != 1 {
+			t.Errorf("Handlers.OnConnect calls = %d, want 1", onConnect)
+		}
+
+		if err := p.Add(t.Context(), options.SetClientID("client-a")); err != nil {
+			t.Fatalf(`Add(Default() with client-a) error = %v, want nil`, err)
+		}
+		if got := maps.Collect(p.Clients()); len(got) != 1 {
+			t.Errorf("Clients() after adding defaults = %v, want one entry", got)
+		}
 	})
 
 	t.Run("canceled context abandons the connection", func(t *testing.T) {
