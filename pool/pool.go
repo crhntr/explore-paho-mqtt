@@ -69,14 +69,38 @@ func (p *Proxy) addAll(ctx context.Context, options ...*mqtt.ClientOptions) erro
 }
 
 // Add connects a new client keyed by options.ClientID and waits for the
-// connection to be established or ctx to end. On failure or cancellation the
-// client is disconnected and nothing is pooled.
+// connection to be established or ctx to end. The client only enters the
+// pool once connected: on connect failure or cancellation it is disconnected,
+// nothing is pooled, and an existing client with the same id stays untouched.
+// When the new client is pooled, a previous client with the same id is shut
+// down and replaced.
 func (p *Proxy) Add(ctx context.Context, options *mqtt.ClientOptions) error {
+	if options == nil {
+		return fmt.Errorf("options must not be nil")
+	}
 	if options.ClientID == "" {
 		return fmt.Errorf("client id must not be empty")
 	}
 	p.installHandlers(options)
 	client := p.newClient(options)
+
+	token := client.Connect()
+	select {
+	case <-token.Done():
+		if err := token.Error(); err != nil {
+			client.Disconnect(disconnectQuiesce)
+			return fmt.Errorf("connecting %q: %w", options.ClientID, err)
+		}
+	case <-ctx.Done():
+		client.Disconnect(disconnectQuiesce)
+		return fmt.Errorf("connecting %q: %w", options.ClientID, ctx.Err())
+	}
+	// The select picks randomly when the token and ctx are ready together;
+	// cancellation must win deterministically.
+	if err := ctx.Err(); err != nil {
+		client.Disconnect(disconnectQuiesce)
+		return fmt.Errorf("connecting %q: %w", options.ClientID, err)
+	}
 
 	p.mu.Lock()
 	previous, replaced := p.clients[options.ClientID]
@@ -85,19 +109,7 @@ func (p *Proxy) Add(ctx context.Context, options *mqtt.ClientOptions) error {
 	if replaced {
 		previous.Disconnect(disconnectQuiesce)
 	}
-
-	token := client.Connect()
-	select {
-	case <-token.Done():
-		if err := token.Error(); err != nil {
-			p.remove(options.ClientID, client)
-			return fmt.Errorf("connecting %q: %w", options.ClientID, err)
-		}
-		return nil
-	case <-ctx.Done():
-		p.remove(options.ClientID, client)
-		return fmt.Errorf("connecting %q: %w", options.ClientID, ctx.Err())
-	}
+	return nil
 }
 
 // installHandlers overrides the handler settings on options with wrappers
@@ -125,17 +137,6 @@ func (p *Proxy) installHandlers(options *mqtt.ClientOptions) {
 			handlers.DefaultPublish(client, message)
 		}
 	})
-}
-
-// remove deletes the entry for clientID if it still holds client and
-// disconnects client either way.
-func (p *Proxy) remove(clientID string, client mqtt.Client) {
-	p.mu.Lock()
-	if p.clients[clientID] == client {
-		delete(p.clients, clientID)
-	}
-	p.mu.Unlock()
-	client.Disconnect(disconnectQuiesce)
 }
 
 // Remove disconnects the client with the given id and reports whether it existed.
@@ -177,7 +178,8 @@ func (p *Proxy) Default() *mqtt.ClientOptions {
 	return options
 }
 
-// Close disconnects and removes all clients.
+// Close disconnects and removes all clients. Close is idempotent and the
+// pool remains usable: Add may be called again afterward.
 func (p *Proxy) Close() {
 	p.mu.Lock()
 	clients := p.clients
