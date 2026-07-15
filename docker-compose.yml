@@ -1,6 +1,75 @@
+x-broker: &broker
+  image: eclipse-mosquitto:openssl
+  volumes:
+    - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+x-go-service: &go-service
+  image: golang:1.26
+  working_dir: /src
+  volumes:
+    - .:/src
+    - go-mod-cache:/go/pkg/mod
+    - go-build-cache:/root/.cache/go-build
+
 services:
   broker-01:
-    image: eclipse-mosquitto:openssl
+    <<: *broker
     ports:
       - "1883:1883"
+  broker-02:
+    <<: *broker
+    ports:
+      - "1884:1883"
+  producer-01-01:
+    <<: *go-service
+    command: go run ./cmd/producer
+    environment:
+      BROKER: tcp://broker-01:1883
+      TOPIC: p1/data
+      PUBLISH_INTERVAL: 1s
+      CLIENT_ID: producer-01-01
+    depends_on:
+      - broker-01
+  producer-01-02:
+    <<: *go-service
+    command: go run ./cmd/producer
+    environment:
+      BROKER: tcp://broker-01:1883
+      TOPIC: p2/data
+      PUBLISH_INTERVAL: 2s
+      CLIENT_ID: producer-01-02
+    depends_on:
+      - broker-01
+  producer-02-01:
+    <<: *go-service
+    command: go run ./cmd/producer
+    environment:
+      BROKER: tcp://broker-02:1883
+      TOPIC: p1/data
+      PUBLISH_INTERVAL: 500ms
+      CLIENT_ID: producer-02-01
+    depends_on:
+      - broker-02
+  producer-02-02:
+    <<: *go-service
+    command: go run ./cmd/producer
+    environment:
+      BROKER: tcp://broker-02:1883
+      TOPIC: p2/data
+      PUBLISH_INTERVAL: 3s
+      CLIENT_ID: producer-02-02
+    depends_on:
+      - broker-02
+  consumer:
+    <<: *go-service
+    command: go run ./cmd/consumer
+    environment:
+      CONFIGURATION: '["tcp://broker-01:1883", "tcp://broker-02:1883"]'
+      CLIENT_ID: consumer
+    depends_on:
+      - broker-01
+      - broker-02
 
+volumes:
+  go-mod-cache:
+  go-build-cache:
