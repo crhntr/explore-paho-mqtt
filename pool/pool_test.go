@@ -9,6 +9,10 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
+//go:generate counterfeiter -generate
+
+//counterfeiter:generate -o ../internal/fake/mqtt_client --fake-name=Client github.com/eclipse/paho.mqtt.golang.Client
+
 func TestProxy_Add(t *testing.T) {
 	t.Run("empty client id", func(t *testing.T) {
 		p, err := New(t.Context(), Handlers{})
@@ -99,6 +103,68 @@ func TestProxy_Add(t *testing.T) {
 		if got := p.Remove("client-a"); got {
 			t.Errorf(`Remove("client-a") again = %t, want false`, got)
 		}
+	})
+
+	t.Run("installs the proxy handlers on the options", func(t *testing.T) {
+		var (
+			onConnect, connectionLost, reconnecting, defaultPublish int
+			gotClient                                               mqtt.Client
+			gotErr                                                  error
+		)
+		handlers := Handlers{
+			OnConnect:      func(c mqtt.Client) { onConnect++; gotClient = c },
+			ConnectionLost: func(_ mqtt.Client, err error) { connectionLost++; gotErr = err },
+			Reconnecting:   func(mqtt.Client, *mqtt.ClientOptions) { reconnecting++ },
+			DefaultPublish: func(mqtt.Client, mqtt.Message) { defaultPublish++ },
+		}
+		recorder := &clientRecorder{}
+		p := newProxy(handlers, recorder.newClient)
+
+		overridden := false
+		options := mqtt.NewClientOptions().SetClientID("client-a")
+		options.SetOnConnectHandler(func(mqtt.Client) { overridden = true })
+		if err := p.Add(t.Context(), options); err != nil {
+			t.Fatalf(`Add(client-a) error = %v, want nil`, err)
+		}
+
+		client := recorder.clients()[0]
+		lostErr := errors.New("connection reset")
+		options.OnConnect(client)
+		options.OnConnectionLost(client, lostErr)
+		options.OnReconnecting(client, options)
+		options.DefaultPublishHandler(client, nil)
+
+		if overridden {
+			t.Error("caller-set OnConnect handler was invoked, want it overridden by the proxy")
+		}
+		if onConnect != 1 || gotClient != mqtt.Client(client) {
+			t.Errorf("Handlers.OnConnect calls = %d with client %v, want 1 with the added client", onConnect, gotClient)
+		}
+		if connectionLost != 1 || !errors.Is(gotErr, lostErr) {
+			t.Errorf("Handlers.ConnectionLost calls = %d with error %v, want 1 with %v", connectionLost, gotErr, lostErr)
+		}
+		if reconnecting != 1 {
+			t.Errorf("Handlers.Reconnecting calls = %d, want 1", reconnecting)
+		}
+		if defaultPublish != 1 {
+			t.Errorf("Handlers.DefaultPublish calls = %d, want 1", defaultPublish)
+		}
+	})
+
+	t.Run("nil handler fields are safe to fire", func(t *testing.T) {
+		recorder := &clientRecorder{}
+		p := newProxy(Handlers{}, recorder.newClient)
+
+		options := mqtt.NewClientOptions().SetClientID("client-a")
+		if err := p.Add(t.Context(), options); err != nil {
+			t.Fatalf(`Add(client-a) error = %v, want nil`, err)
+		}
+
+		client := recorder.clients()[0]
+		options.OnConnect(client)
+		options.OnConnectionLost(client, errors.New("connection reset"))
+		options.OnReconnecting(client, options)
+		options.DefaultPublishHandler(client, nil)
 	})
 
 	t.Run("canceled context abandons the connection", func(t *testing.T) {
