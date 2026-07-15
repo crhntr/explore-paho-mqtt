@@ -3,7 +3,9 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
+	"sync"
 	"testing"
 	"time"
 
@@ -253,6 +255,33 @@ func TestProxy_Add(t *testing.T) {
 			t.Errorf("abandoned client Disconnect calls = %d, want 1", created[0].DisconnectCallCount())
 		}
 	})
+}
+
+func TestProxy_ConcurrentUse(t *testing.T) {
+	recorder := &clientRecorder{}
+	p := newProxy(Handlers{}, recorder.newClient)
+
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			clientID := fmt.Sprintf("client-%d", i%4)
+			for range 50 {
+				if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID(clientID)); err != nil {
+					t.Errorf("Add(%s) error = %v, want nil", clientID, err)
+					return
+				}
+				for range p.Clients() {
+				}
+				p.Remove(clientID)
+			}
+		})
+	}
+	wg.Wait()
+	p.Close()
+
+	if got := maps.Collect(p.Clients()); len(got) != 0 {
+		t.Errorf("Clients() after concurrent use and Close = %v, want empty", got)
+	}
 }
 
 func TestProxy_Close(t *testing.T) {
