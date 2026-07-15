@@ -46,13 +46,12 @@ func newProxy(handlers Handlers, newClient func(*mqtt.ClientOptions) mqtt.Client
 	}
 }
 
-// New creates a Proxy and adds each of the given client options.
+// New creates a Proxy and adds each of the given client options. If any of
+// them fails, the already-added clients are shut down and the error returned.
 func New(ctx context.Context, handlers Handlers, options ...*mqtt.ClientOptions) (*Proxy, error) {
 	p := newProxy(handlers, mqtt.NewClient)
-	for _, o := range options {
-		if err := p.Add(ctx, o); err != nil {
-			return nil, err
-		}
+	if err := p.addAll(ctx, options...); err != nil {
+		return nil, err
 	}
 	return p, nil
 }
@@ -60,7 +59,13 @@ func New(ctx context.Context, handlers Handlers, options ...*mqtt.ClientOptions)
 // addAll adds each of the given options; on failure it shuts down every
 // client added so far and returns the error.
 func (p *Proxy) addAll(ctx context.Context, options ...*mqtt.ClientOptions) error {
-	panic("not implemented")
+	for _, o := range options {
+		if err := p.Add(ctx, o); err != nil {
+			p.Close()
+			return err
+		}
+	}
+	return nil
 }
 
 // Add connects a new client keyed by options.ClientID and waits for the
@@ -174,5 +179,11 @@ func (p *Proxy) Default() *mqtt.ClientOptions {
 
 // Close disconnects and removes all clients.
 func (p *Proxy) Close() {
-	panic("not implemented")
+	p.mu.Lock()
+	clients := p.clients
+	p.clients = make(map[string]mqtt.Client)
+	p.mu.Unlock()
+	for _, client := range clients {
+		client.Disconnect(disconnectQuiesce)
+	}
 }
