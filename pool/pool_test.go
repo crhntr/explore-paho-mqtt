@@ -207,6 +207,31 @@ func TestProxy_Add(t *testing.T) {
 		}
 	})
 
+	t.Run("initial options failure shuts down already-added clients", func(t *testing.T) {
+		connectErr := errors.New("broker unreachable")
+		tokens := []mqtt.Token{completedToken(nil), completedToken(connectErr)}
+		recorder := &clientRecorder{connectToken: func() mqtt.Token {
+			token := tokens[0]
+			tokens = tokens[1:]
+			return token
+		}}
+		p := newProxy(Handlers{}, recorder.newClient)
+
+		err := p.addAll(t.Context(),
+			mqtt.NewClientOptions().SetClientID("client-a"),
+			mqtt.NewClientOptions().SetClientID("client-b"),
+		)
+		if !errors.Is(err, connectErr) {
+			t.Fatalf("addAll(client-a, failing client-b) error = %v, want wrapped %v", err, connectErr)
+		}
+		if got := recorder.clients()[0].DisconnectCallCount(); got != 1 {
+			t.Errorf("already-added client Disconnect calls = %d, want 1", got)
+		}
+		if got := maps.Collect(p.Clients()); len(got) != 0 {
+			t.Errorf("Clients() after failed addAll = %v, want empty", got)
+		}
+	})
+
 	t.Run("canceled context abandons the connection", func(t *testing.T) {
 		recorder := &clientRecorder{connectToken: func() mqtt.Token { return pendingToken() }}
 		p := newProxy(Handlers{}, recorder.newClient)
@@ -228,4 +253,25 @@ func TestProxy_Add(t *testing.T) {
 			t.Errorf("abandoned client Disconnect calls = %d, want 1", created[0].DisconnectCallCount())
 		}
 	})
+}
+
+func TestProxy_Close(t *testing.T) {
+	recorder := &clientRecorder{}
+	p := newProxy(Handlers{}, recorder.newClient)
+	for _, clientID := range []string{"client-a", "client-b"} {
+		if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID(clientID)); err != nil {
+			t.Fatalf(`Add(%s) error = %v, want nil`, clientID, err)
+		}
+	}
+
+	p.Close()
+
+	for i, client := range recorder.clients() {
+		if got := client.DisconnectCallCount(); got != 1 {
+			t.Errorf("client %d Disconnect calls = %d, want 1", i, got)
+		}
+	}
+	if got := maps.Collect(p.Clients()); len(got) != 0 {
+		t.Errorf("Clients() after Close = %v, want empty", got)
+	}
 }

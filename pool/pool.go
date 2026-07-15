@@ -57,6 +57,12 @@ func New(ctx context.Context, handlers Handlers, options ...*mqtt.ClientOptions)
 	return p, nil
 }
 
+// addAll adds each of the given options; on failure it shuts down every
+// client added so far and returns the error.
+func (p *Proxy) addAll(ctx context.Context, options ...*mqtt.ClientOptions) error {
+	panic("not implemented")
+}
+
 // Add connects a new client keyed by options.ClientID and waits for the
 // connection to be established or ctx to end. On failure or cancellation the
 // client is disconnected and nothing is pooled.
