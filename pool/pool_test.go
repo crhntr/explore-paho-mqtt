@@ -80,6 +80,27 @@ func TestProxy_Add(t *testing.T) {
 		}
 	})
 
+	t.Run("remove disconnects and forgets the client", func(t *testing.T) {
+		recorder := &clientRecorder{}
+		p := newProxy(Handlers{}, recorder.newClient)
+		if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID("client-a")); err != nil {
+			t.Fatalf(`Add(client-a) error = %v, want nil`, err)
+		}
+
+		if got := p.Remove("client-a"); !got {
+			t.Errorf(`Remove("client-a") = %t, want true`, got)
+		}
+		if got := recorder.clients()[0].disconnectCount(); got != 1 {
+			t.Errorf("removed client Disconnect calls = %d, want 1", got)
+		}
+		if got := maps.Collect(p.Clients()); len(got) != 0 {
+			t.Errorf("Clients() after Remove = %v, want empty", got)
+		}
+		if got := p.Remove("client-a"); got {
+			t.Errorf(`Remove("client-a") again = %t, want false`, got)
+		}
+	})
+
 	t.Run("canceled context abandons the connection", func(t *testing.T) {
 		recorder := &clientRecorder{connectToken: func() mqtt.Token { return pendingToken() }}
 		p := newProxy(Handlers{}, recorder.newClient)
