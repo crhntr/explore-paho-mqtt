@@ -14,9 +14,9 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-// disconnectQuiesce is how many milliseconds a client gets to finish
-// in-flight work before its network connection is closed.
-const disconnectQuiesce = 250
+// defaultDisconnectQuiesce is how long a client gets to finish in-flight
+// work before its network connection is closed.
+const defaultDisconnectQuiesce = 250 * time.Millisecond
 
 // Handlers are the caller's event handlers. The proxy installs them on every
 // added client. Inside a handler, identify the connection that fired with
@@ -33,16 +33,36 @@ type Proxy struct {
 	handlers  Handlers
 	newClient func(*mqtt.ClientOptions) mqtt.Client
 
-	mu      sync.Mutex
-	clients map[string]mqtt.Client
+	mu            sync.Mutex
+	clients       map[string]mqtt.Client
+	quiesceMillis uint
+}
+
+// SetDisconnectQuiesce sets how long a client gets to finish in-flight work
+// before the proxy closes its network connection (on Remove, Close, or
+// replacement by Add). Negative durations are treated as zero. The default
+// is 250ms.
+func (p *Proxy) SetDisconnectQuiesce(d time.Duration) {
+	p.mu.Lock()
+	p.quiesceMillis = uint(max(d, 0).Milliseconds())
+	p.mu.Unlock()
+}
+
+// disconnect closes client's connection using the configured quiesce.
+func (p *Proxy) disconnect(client mqtt.Client) {
+	p.mu.Lock()
+	quiesce := p.quiesceMillis
+	p.mu.Unlock()
+	client.Disconnect(quiesce)
 }
 
 // newProxy constructs a Proxy with an injectable client constructor for tests.
 func newProxy(handlers Handlers, newClient func(*mqtt.ClientOptions) mqtt.Client) *Proxy {
 	return &Proxy{
-		handlers:  handlers,
-		newClient: newClient,
-		clients:   make(map[string]mqtt.Client),
+		handlers:      handlers,
+		newClient:     newClient,
+		clients:       make(map[string]mqtt.Client),
+		quiesceMillis: uint(defaultDisconnectQuiesce.Milliseconds()),
 	}
 }
 
@@ -88,17 +108,17 @@ func (p *Proxy) Add(ctx context.Context, options *mqtt.ClientOptions) error {
 	select {
 	case <-token.Done():
 		if err := token.Error(); err != nil {
-			client.Disconnect(disconnectQuiesce)
+			p.disconnect(client)
 			return fmt.Errorf("connecting %q: %w", options.ClientID, err)
 		}
 	case <-ctx.Done():
-		client.Disconnect(disconnectQuiesce)
+		p.disconnect(client)
 		return fmt.Errorf("connecting %q: %w", options.ClientID, ctx.Err())
 	}
 	// The select picks randomly when the token and ctx are ready together;
 	// cancellation must win deterministically.
 	if err := ctx.Err(); err != nil {
-		client.Disconnect(disconnectQuiesce)
+		p.disconnect(client)
 		return fmt.Errorf("connecting %q: %w", options.ClientID, err)
 	}
 
@@ -107,7 +127,7 @@ func (p *Proxy) Add(ctx context.Context, options *mqtt.ClientOptions) error {
 	p.clients[options.ClientID] = client
 	p.mu.Unlock()
 	if replaced {
-		previous.Disconnect(disconnectQuiesce)
+		p.disconnect(previous)
 	}
 	return nil
 }
@@ -146,7 +166,7 @@ func (p *Proxy) Remove(clientID string) bool {
 	delete(p.clients, clientID)
 	p.mu.Unlock()
 	if ok {
-		client.Disconnect(disconnectQuiesce)
+		p.disconnect(client)
 	}
 	return ok
 }
@@ -186,6 +206,6 @@ func (p *Proxy) Close() {
 	p.clients = make(map[string]mqtt.Client)
 	p.mu.Unlock()
 	for _, client := range clients {
-		client.Disconnect(disconnectQuiesce)
+		p.disconnect(client)
 	}
 }

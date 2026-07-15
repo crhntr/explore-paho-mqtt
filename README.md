@@ -70,6 +70,8 @@ connection delivered the message.
 - `Clients() iter.Seq2[string, mqtt.Client]` — snapshot iteration.
 - `Default()` — preconfigured `*mqtt.ClientOptions` (proxy handlers, connect
   retry, auto reconnect) to override and pass back to `Add`.
+- `SetDisconnectQuiesce(time.Duration)` — how long a client gets to finish
+  in-flight work before the proxy closes its connection (default 250ms).
 
 Tests use counterfeiter fakes generated into `internal/fake`
 (`go generate ./pool`).
