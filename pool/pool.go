@@ -63,6 +63,7 @@ func (p *Proxy) Add(ctx context.Context, options *mqtt.ClientOptions) error {
 	if options.ClientID == "" {
 		return fmt.Errorf("client id must not be empty")
 	}
+	p.installHandlers(options)
 	client := p.newClient(options)
 
 	p.mu.Lock()
@@ -85,6 +86,33 @@ func (p *Proxy) Add(ctx context.Context, options *mqtt.ClientOptions) error {
 		p.remove(options.ClientID, client)
 		return fmt.Errorf("connecting %q: %w", options.ClientID, ctx.Err())
 	}
+}
+
+// installHandlers overrides the handler settings on options with wrappers
+// that forward to the proxy's Handlers. Wrappers no-op for nil fields so paho
+// never invokes a nil handler.
+func (p *Proxy) installHandlers(options *mqtt.ClientOptions) {
+	handlers := p.handlers
+	options.SetOnConnectHandler(func(client mqtt.Client) {
+		if handlers.OnConnect != nil {
+			handlers.OnConnect(client)
+		}
+	})
+	options.SetConnectionLostHandler(func(client mqtt.Client, err error) {
+		if handlers.ConnectionLost != nil {
+			handlers.ConnectionLost(client, err)
+		}
+	})
+	options.SetReconnectingHandler(func(client mqtt.Client, options *mqtt.ClientOptions) {
+		if handlers.Reconnecting != nil {
+			handlers.Reconnecting(client, options)
+		}
+	})
+	options.SetDefaultPublishHandler(func(client mqtt.Client, message mqtt.Message) {
+		if handlers.DefaultPublish != nil {
+			handlers.DefaultPublish(client, message)
+		}
+	})
 }
 
 // remove deletes the entry for clientID if it still holds client and

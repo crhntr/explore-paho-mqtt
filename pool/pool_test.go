@@ -11,7 +11,9 @@ import (
 
 //go:generate counterfeiter -generate
 
-//counterfeiter:generate -o ../internal/fake/mqtt_client --fake-name=Client github.com/eclipse/paho.mqtt.golang.Client
+//counterfeiter:generate -o ../internal/fake/mqtt_client.go --fake-name=Client github.com/eclipse/paho.mqtt.golang.Client
+//counterfeiter:generate -o ../internal/fake/mqtt_message.go --fake-name=Message github.com/eclipse/paho.mqtt.golang.Message
+//counterfeiter:generate -o ../internal/fake/mqtt_token.go --fake-name=Token github.com/eclipse/paho.mqtt.golang.Token
 
 func TestProxy_Add(t *testing.T) {
 	t.Run("empty client id", func(t *testing.T) {
