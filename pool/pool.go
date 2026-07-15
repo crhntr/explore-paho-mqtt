@@ -66,8 +66,12 @@ func (p *Proxy) Add(ctx context.Context, options *mqtt.ClientOptions) error {
 	client := p.newClient(options)
 
 	p.mu.Lock()
+	previous, replaced := p.clients[options.ClientID]
 	p.clients[options.ClientID] = client
 	p.mu.Unlock()
+	if replaced {
+		previous.Disconnect(disconnectQuiesce)
+	}
 
 	token := client.Connect()
 	select {
