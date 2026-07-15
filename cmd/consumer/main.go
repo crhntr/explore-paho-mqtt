@@ -8,11 +8,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+
+	"github.com/crhntr/explore-paho-mqtt/pool"
 )
 
 type message struct {
@@ -39,42 +40,41 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	options := mqtt.NewClientOptions().
-		SetClientID(clientID).
-		SetConnectRetry(true).
-		SetConnectRetryInterval(time.Second).
-		SetAutoReconnect(true).
-		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
-			logger.Warn("connection lost", "error", err)
-		}).
-		// Subscribing in OnConnect re-establishes subscriptions after a
-		// failover to another broker, which starts a fresh session.
-		SetOnConnectHandler(func(client mqtt.Client) {
-			logger.Info("connected", "brokers", brokerURLs)
+	proxy, err := pool.New(ctx, pool.Handlers{
+		OnConnect: func(client mqtt.Client) {
+			id := connectionID(client)
+			logger.Info("connected", "client_id", id)
 			subscribe := client.Subscribe("#", 1, receiveMessage(logger))
 			if !subscribe.WaitTimeout(10 * time.Second) {
-				logger.Warn("subscribe timed out")
+				logger.Warn("subscribe timed out", "client_id", id)
 			} else if err := subscribe.Error(); err != nil {
-				logger.Warn("subscribe failed", "error", err)
+				logger.Warn("subscribe failed", "client_id", id, "error", err)
 			} else {
-				logger.Info("subscribed")
+				logger.Info("subscribed", "client_id", id)
 			}
-		})
-	for _, brokerURL := range brokerURLs {
-		options.AddBroker(brokerURL)
+		},
+		ConnectionLost: func(client mqtt.Client, err error) {
+			logger.Warn("connection lost", "client_id", connectionID(client), "error", err)
+		},
+		Reconnecting: func(_ mqtt.Client, options *mqtt.ClientOptions) {
+			logger.Info("reconnecting", "client_id", options.ClientID)
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("creating connection pool: %w", err)
 	}
+	defer proxy.Close()
 
-	client := mqtt.NewClient(options)
-	connect := client.Connect()
-	for !connect.WaitTimeout(time.Second) {
-		if ctx.Err() != nil {
-			return nil
+	// One pooled client per broker so the consumer receives from all brokers
+	// simultaneously — paho itself only holds one connection per client.
+	for i, brokerURL := range brokerURLs {
+		options := proxy.Default().
+			AddBroker(brokerURL).
+			SetClientID(fmt.Sprintf("%s-%02d", clientID, i))
+		if err := proxy.Add(ctx, options); err != nil {
+			return fmt.Errorf("adding broker %s: %w", brokerURL, err)
 		}
 	}
-	if err := connect.Error(); err != nil {
-		return fmt.Errorf("connecting to %s: %w", strings.Join(brokerURLs, ", "), err)
-	}
-	defer client.Disconnect(250)
 
 	<-ctx.Done()
 	logger.Info("shutting down")
@@ -82,20 +82,28 @@ func run(logger *slog.Logger) error {
 }
 
 func receiveMessage(logger *slog.Logger) mqtt.MessageHandler {
-	return func(_ mqtt.Client, msg mqtt.Message) {
+	return func(client mqtt.Client, msg mqtt.Message) {
 		var m message
 		if err := json.Unmarshal(msg.Payload(), &m); err != nil {
 			logger.Info("received", "topic", msg.Topic(), "payload", string(msg.Payload()))
 			return
 		}
 		logger.Info("received",
+			"via", connectionID(client),
 			"topic", msg.Topic(),
 			"producer", m.Producer,
 			"sequence", m.Sequence,
-			"sent_at", m.SentAt.Format(time.RFC3339Nano),
 			"latency", time.Since(m.SentAt).Round(time.Millisecond),
 		)
 	}
+}
+
+// connectionID identifies which pooled connection an event came from.
+// ClientOptionsReader methods use a pointer receiver, so the reader needs a
+// variable before ClientID can be called.
+func connectionID(client mqtt.Client) string {
+	reader := client.OptionsReader()
+	return reader.ClientID()
 }
 
 func defaultClientID() string {
