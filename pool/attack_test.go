@@ -36,6 +36,34 @@ func TestAttack_AddNilOptions(t *testing.T) {
 	}
 }
 
+// Attack: context handling.
+// Hypothesis: Add's select (pool.go:90-100) races token.Done() against
+// ctx.Done(). When the connect token is already complete, both cases are
+// ready and Go picks one at random, so Add with an already-canceled context
+// nondeterministically returns nil and pools the client instead of failing.
+func TestAttack_AddWithCanceledContextNeverSucceeds(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	successes := 0
+	const attempts = 200
+	for i := range attempts {
+		recorder := &clientRecorder{}
+		p := newProxy(Handlers{}, recorder.newClient)
+		err := p.Add(ctx, mqtt.NewClientOptions().SetClientID("client-a"))
+		if err == nil {
+			successes++
+			continue
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("attempt %d: Add(canceled ctx) error = %v, want wrapped %v", i, err, context.Canceled)
+		}
+	}
+	if successes != 0 {
+		t.Errorf("Add(canceled ctx) returned nil on %d of %d attempts, want 0 (an already-canceled context must always fail)", successes, attempts)
+	}
+}
+
 // Attack: state corruption on the failure path.
 // Hypothesis: Add replaces the pooled client and disconnects it BEFORE
 // connecting the new one (pool.go:81-87). When the new connect then fails or
