@@ -137,26 +137,26 @@ func (p *Proxy) Add(ctx context.Context, options *mqtt.ClientOptions) error {
 // never invokes a nil handler.
 func (p *Proxy) installHandlers(options *mqtt.ClientOptions) {
 	handlers := p.handlers
-	options.SetOnConnectHandler(func(client mqtt.Client) {
-		if handlers.OnConnect != nil {
+	if handlers.OnConnect != nil {
+		options.SetOnConnectHandler(func(client mqtt.Client) {
 			handlers.OnConnect(client)
-		}
-	})
-	options.SetConnectionLostHandler(func(client mqtt.Client, err error) {
-		if handlers.ConnectionLost != nil {
+		})
+	}
+	if handlers.ConnectionLost != nil {
+		options.SetConnectionLostHandler(func(client mqtt.Client, err error) {
 			handlers.ConnectionLost(client, err)
-		}
-	})
-	options.SetReconnectingHandler(func(client mqtt.Client, options *mqtt.ClientOptions) {
-		if handlers.Reconnecting != nil {
+		})
+	}
+	if handlers.Reconnecting != nil {
+		options.SetReconnectingHandler(func(client mqtt.Client, options *mqtt.ClientOptions) {
 			handlers.Reconnecting(client, options)
-		}
-	})
-	options.SetDefaultPublishHandler(func(client mqtt.Client, message mqtt.Message) {
-		if handlers.DefaultPublish != nil {
+		})
+	}
+	if handlers.DefaultPublish != nil {
+		options.SetDefaultPublishHandler(func(client mqtt.Client, message mqtt.Message) {
 			handlers.DefaultPublish(client, message)
-		}
-	})
+		})
+	}
 }
 
 // Remove disconnects the client with the given id and reports whether it existed.

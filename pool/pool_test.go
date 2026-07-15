@@ -158,22 +158,6 @@ func TestProxy_Add(t *testing.T) {
 		}
 	})
 
-	t.Run("nil handler fields are safe to fire", func(t *testing.T) {
-		recorder := &clientRecorder{}
-		p := newProxy(Handlers{}, recorder.newClient)
-
-		options := mqtt.NewClientOptions().SetClientID("client-a")
-		if err := p.Add(t.Context(), options); err != nil {
-			t.Fatalf(`Add(client-a) error = %v, want nil`, err)
-		}
-
-		client := recorder.clients()[0]
-		options.OnConnect(client)
-		options.OnConnectionLost(client, errors.New("connection reset"))
-		options.OnReconnecting(client, options)
-		options.DefaultPublishHandler(client, nil)
-	})
-
 	t.Run("default options can be overridden and added", func(t *testing.T) {
 		onConnect := 0
 		recorder := &clientRecorder{}
@@ -190,8 +174,11 @@ func TestProxy_Add(t *testing.T) {
 		if options.ConnectRetryInterval != time.Second {
 			t.Errorf("Default().ConnectRetryInterval = %v, want %v", options.ConnectRetryInterval, time.Second)
 		}
-		if options.OnConnectionLost == nil || options.OnReconnecting == nil || options.DefaultPublishHandler == nil {
-			t.Error("Default() left a proxy handler unset, want all handlers installed")
+		if options.OnReconnecting != nil || options.DefaultPublishHandler != nil {
+			t.Error("only set handlers that are not null on the Handlers struct")
+		}
+		if options.OnConnectionLost == nil {
+			t.Error("the default options set this in NewClientOptions so it is okay for it to be set even though it is not set on Handlers")
 		}
 		if options.OnConnect == nil {
 			t.Fatal("Default().OnConnect = nil, want the proxy handler installed")
