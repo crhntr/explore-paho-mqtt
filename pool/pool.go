@@ -9,6 +9,7 @@ import (
 	"iter"
 	"maps"
 	"sync"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
@@ -153,9 +154,16 @@ func (p *Proxy) Clients() iter.Seq2[string, mqtt.Client] {
 	}
 }
 
-// Default returns client options preconfigured with the proxy's handlers.
+// Default returns client options preconfigured with the proxy's handlers,
+// connect retry, and auto reconnect. Override what you need (broker URL,
+// client id, credentials, ...) and pass the result to Add.
 func (p *Proxy) Default() *mqtt.ClientOptions {
-	panic("not implemented")
+	options := mqtt.NewClientOptions().
+		SetConnectRetry(true).
+		SetConnectRetryInterval(time.Second).
+		SetAutoReconnect(true)
+	p.installHandlers(options)
+	return options
 }
 
 // Close disconnects and removes all clients.
