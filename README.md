@@ -50,5 +50,26 @@ The consumer logs `connection lost`, reconnects to `broker-02`, resubscribes
 (the subscription is made in the `OnConnect` handler so it survives failover),
 and starts receiving from `producer-02-01` and `producer-02-02` instead.
 
-To consume from all brokers at once you would need one client per broker (or a
+To consume from all brokers at once you need one client per broker (or a
 broker-side bridge between the Mosquitto instances).
+
+## Package `pool`: consuming from all brokers
+
+`pool.Proxy` manages a dynamic set of MQTT clients keyed by client id. The
+consumer uses it to hold one connection per broker, so it receives from all
+brokers simultaneously — each log line's `via` attribute shows which pooled
+connection delivered the message.
+
+- `New(ctx, handlers, options...)` — caller-supplied handlers use unchanged
+  paho signatures; inside a handler, `client.OptionsReader().ClientID()`
+  identifies the connection that fired.
+- `Add(ctx, options)` — connects a client keyed by `options.ClientID`,
+  waiting until connected or ctx ends. Adding an id that already exists shuts
+  down the previous client and replaces it.
+- `Remove(id)` / `Close()` — disconnect one / all.
+- `Clients() iter.Seq2[string, mqtt.Client]` — snapshot iteration.
+- `Default()` — preconfigured `*mqtt.ClientOptions` (proxy handlers, connect
+  retry, auto reconnect) to override and pass back to `Add`.
+
+Tests use counterfeiter fakes generated into `internal/fake`
+(`go generate ./pool`).
