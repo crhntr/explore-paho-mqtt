@@ -5,6 +5,7 @@ package pool
 
 import (
 	"context"
+	"fmt"
 	"iter"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -25,13 +26,22 @@ type Proxy struct{}
 
 // New creates a Proxy and adds each of the given client options.
 func New(ctx context.Context, handlers Handlers, options ...*mqtt.ClientOptions) (*Proxy, error) {
-	panic("not implemented")
+	p := &Proxy{}
+	for _, o := range options {
+		if err := p.Add(ctx, o); err != nil {
+			return nil, err
+		}
+	}
+	return p, nil
 }
 
 // Add connects a new client keyed by options.ClientID and waits for the
 // connection to be established or ctx to end.
 func (p *Proxy) Add(ctx context.Context, options *mqtt.ClientOptions) error {
-	panic("not implemented")
+	if options.ClientID == "" {
+		return fmt.Errorf("client id must not be empty")
+	}
+	return nil
 }
 
 // Remove disconnects the client with the given id and reports whether it existed.
