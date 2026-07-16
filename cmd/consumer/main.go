@@ -13,7 +13,7 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 
-	"github.com/crhntr/explore-paho-mqtt/pool"
+	"github.com/crhntr/explore-paho-mqtt/broker"
 )
 
 type message struct {
@@ -40,7 +40,7 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	proxy, err := pool.New(ctx, pool.Handlers{
+	proxy, err := broker.New(ctx, broker.Handlers{
 		OnConnect: func(client mqtt.Client) {
 			id := connectionID(client)
 			logger.Info("connected", "client_id", id)

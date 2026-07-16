@@ -1,7 +1,7 @@
-// Package pool manages a dynamic set of MQTT client connections keyed by
+// Package broker manages a dynamic set of MQTT client connections keyed by
 // client id and proxies connection and message events up to the caller
 // through standard paho handler signatures.
-package pool
+package broker
 
 import (
 	"context"
@@ -28,8 +28,8 @@ type Handlers struct {
 	DefaultPublish mqtt.MessageHandler
 }
 
-// Proxy is a dynamic pool of MQTT clients keyed by client id.
-type Proxy struct {
+// Aggregator is a dynamic pool of MQTT clients keyed by client id.
+type Aggregator struct {
 	handlers  Handlers
 	newClient func(*mqtt.ClientOptions) mqtt.Client
 
@@ -42,23 +42,23 @@ type Proxy struct {
 // before the proxy closes its network connection (on Remove, Close, or
 // replacement by Add). Negative durations are treated as zero. The default
 // is 250ms.
-func (p *Proxy) SetDisconnectQuiesce(d time.Duration) {
+func (p *Aggregator) SetDisconnectQuiesce(d time.Duration) {
 	p.mu.Lock()
 	p.quiesceMillis = uint(max(d, 0).Milliseconds())
 	p.mu.Unlock()
 }
 
 // disconnect closes client's connection using the configured quiesce.
-func (p *Proxy) disconnect(client mqtt.Client) {
+func (p *Aggregator) disconnect(client mqtt.Client) {
 	p.mu.Lock()
 	quiesce := p.quiesceMillis
 	p.mu.Unlock()
 	client.Disconnect(quiesce)
 }
 
-// newProxy constructs a Proxy with an injectable client constructor for tests.
-func newProxy(handlers Handlers, newClient func(*mqtt.ClientOptions) mqtt.Client) *Proxy {
-	return &Proxy{
+// newProxy constructs a Aggregator with an injectable client constructor for tests.
+func newProxy(handlers Handlers, newClient func(*mqtt.ClientOptions) mqtt.Client) *Aggregator {
+	return &Aggregator{
 		handlers:      handlers,
 		newClient:     newClient,
 		clients:       make(map[string]mqtt.Client),
@@ -66,9 +66,9 @@ func newProxy(handlers Handlers, newClient func(*mqtt.ClientOptions) mqtt.Client
 	}
 }
 
-// New creates a Proxy and adds each of the given client options. If any of
+// New creates a Aggregator and adds each of the given client options. If any of
 // them fails, the already-added clients are shut down and the error returned.
-func New(ctx context.Context, handlers Handlers, options ...*mqtt.ClientOptions) (*Proxy, error) {
+func New(ctx context.Context, handlers Handlers, options ...*mqtt.ClientOptions) (*Aggregator, error) {
 	p := newProxy(handlers, mqtt.NewClient)
 	if err := p.addAll(ctx, options...); err != nil {
 		return nil, err
@@ -78,7 +78,7 @@ func New(ctx context.Context, handlers Handlers, options ...*mqtt.ClientOptions)
 
 // addAll adds each of the given options; on failure it shuts down every
 // client added so far and returns the error.
-func (p *Proxy) addAll(ctx context.Context, options ...*mqtt.ClientOptions) error {
+func (p *Aggregator) addAll(ctx context.Context, options ...*mqtt.ClientOptions) error {
 	for _, o := range options {
 		if err := p.Add(ctx, o); err != nil {
 			p.Close()
@@ -94,7 +94,7 @@ func (p *Proxy) addAll(ctx context.Context, options ...*mqtt.ClientOptions) erro
 // nothing is pooled, and an existing client with the same id stays untouched.
 // When the new client is pooled, a previous client with the same id is shut
 // down and replaced.
-func (p *Proxy) Add(ctx context.Context, options *mqtt.ClientOptions) error {
+func (p *Aggregator) Add(ctx context.Context, options *mqtt.ClientOptions) error {
 	if options == nil {
 		return fmt.Errorf("options must not be nil")
 	}
@@ -135,7 +135,7 @@ func (p *Proxy) Add(ctx context.Context, options *mqtt.ClientOptions) error {
 // installHandlers overrides the handler settings on options with wrappers
 // that forward to the proxy's Handlers. Wrappers no-op for nil fields so paho
 // never invokes a nil handler.
-func (p *Proxy) installHandlers(options *mqtt.ClientOptions) {
+func (p *Aggregator) installHandlers(options *mqtt.ClientOptions) {
 	handlers := p.handlers
 	if handlers.OnConnect != nil {
 		options.SetOnConnectHandler(func(client mqtt.Client) {
@@ -160,7 +160,7 @@ func (p *Proxy) installHandlers(options *mqtt.ClientOptions) {
 }
 
 // Remove disconnects the client with the given id and reports whether it existed.
-func (p *Proxy) Remove(clientID string) bool {
+func (p *Aggregator) Remove(clientID string) bool {
 	p.mu.Lock()
 	client, ok := p.clients[clientID]
 	delete(p.clients, clientID)
@@ -173,7 +173,7 @@ func (p *Proxy) Remove(clientID string) bool {
 
 // Clients iterates over a snapshot of the pooled clients keyed by client id.
 // The pool may be modified while ranging.
-func (p *Proxy) Clients() iter.Seq2[string, mqtt.Client] {
+func (p *Aggregator) Clients() iter.Seq2[string, mqtt.Client] {
 	return func(yield func(string, mqtt.Client) bool) {
 		p.mu.Lock()
 		snapshot := maps.Clone(p.clients)
@@ -189,7 +189,7 @@ func (p *Proxy) Clients() iter.Seq2[string, mqtt.Client] {
 // Default returns client options preconfigured with the proxy's handlers,
 // connect retry, and auto reconnect. Override what you need (broker URL,
 // client id, credentials, ...) and pass the result to Add.
-func (p *Proxy) Default() *mqtt.ClientOptions {
+func (p *Aggregator) Default() *mqtt.ClientOptions {
 	options := mqtt.NewClientOptions().
 		SetConnectRetry(true).
 		SetConnectRetryInterval(time.Second).
@@ -200,7 +200,7 @@ func (p *Proxy) Default() *mqtt.ClientOptions {
 
 // Close disconnects and removes all clients. Close is idempotent and the
 // pool remains usable: Add may be called again afterward.
-func (p *Proxy) Close() {
+func (p *Aggregator) Close() {
 	p.mu.Lock()
 	clients := p.clients
 	p.clients = make(map[string]mqtt.Client)
