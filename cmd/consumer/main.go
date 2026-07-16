@@ -40,7 +40,7 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	proxy, err := broker.New(ctx, broker.Handlers{
+	aggregator, err := broker.New(ctx, 0, broker.Handlers{
 		OnConnect: func(client mqtt.Client) {
 			id := connectionID(client)
 			logger.Info("connected", "client_id", id)
@@ -63,15 +63,15 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("creating connection pool: %w", err)
 	}
-	defer proxy.Close()
+	defer aggregator.Close()
 
 	// One pooled client per broker so the consumer receives from all brokers
 	// simultaneously — paho itself only holds one connection per client.
 	for i, brokerURL := range brokerURLs {
-		options := proxy.Default().
+		options := aggregator.Default().
 			AddBroker(brokerURL).
 			SetClientID(fmt.Sprintf("%s-%02d", clientID, i))
-		if err := proxy.Add(ctx, options); err != nil {
+		if err := aggregator.Add(ctx, options); err != nil {
 			return fmt.Errorf("adding broker %s: %w", brokerURL, err)
 		}
 	}

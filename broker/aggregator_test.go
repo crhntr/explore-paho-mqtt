@@ -1,4 +1,4 @@
-package broker
+package broker_test
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 
+	"github.com/crhntr/explore-paho-mqtt/broker"
 	"github.com/crhntr/explore-paho-mqtt/internal/fake"
 )
 
@@ -20,9 +21,9 @@ import (
 //counterfeiter:generate -o ../internal/fake/mqtt_message.go --fake-name=Message github.com/eclipse/paho.mqtt.golang.Message
 //counterfeiter:generate -o ../internal/fake/mqtt_token.go --fake-name=Token github.com/eclipse/paho.mqtt.golang.Token
 
-func TestProxy_Add(t *testing.T) {
+func TestAggregator_Add(t *testing.T) {
 	t.Run("empty client id", func(t *testing.T) {
-		p, err := New(t.Context(), Handlers{})
+		p, err := broker.New(t.Context(), 0, broker.Handlers{})
 		if err != nil {
 			t.Fatalf("New(Handlers{}) error = %v, want nil", err)
 		}
@@ -32,11 +33,14 @@ func TestProxy_Add(t *testing.T) {
 	})
 
 	t.Run("stores the connected client", func(t *testing.T) {
-		recorder := &clientRecorder{}
-		p := newProxy(Handlers{}, recorder.newClient)
-
-		err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID("client-a"))
+		recorder := new(clientRecorder)
+		ctx := t.Context()
+		p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
 		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID("client-a")); err != nil {
 			t.Fatalf(`Add(client-a) error = %v, want nil`, err)
 		}
 
@@ -54,8 +58,12 @@ func TestProxy_Add(t *testing.T) {
 	})
 
 	t.Run("replaces and shuts down a client with the same id", func(t *testing.T) {
-		recorder := &clientRecorder{}
-		p := newProxy(Handlers{}, recorder.newClient)
+		recorder := new(clientRecorder)
+		ctx := t.Context()
+		p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID("client-a")); err != nil {
 			t.Fatalf(`first Add(client-a) error = %v, want nil`, err)
@@ -80,10 +88,13 @@ func TestProxy_Add(t *testing.T) {
 	t.Run("connect failure pools nothing", func(t *testing.T) {
 		connectErr := errors.New("broker unreachable")
 		recorder := &clientRecorder{connectToken: func() mqtt.Token { return completedToken(connectErr) }}
-		p := newProxy(Handlers{}, recorder.newClient)
+		ctx := t.Context()
+		p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+		if err != nil {
+			t.Fatal(err)
+		}
 
-		err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID("client-a"))
-		if !errors.Is(err, connectErr) {
+		if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID("client-a")); !errors.Is(err, connectErr) {
 			t.Fatalf("Add(client-a) error = %v, want wrapped %v", err, connectErr)
 		}
 		if got := maps.Collect(p.Clients()); len(got) != 0 {
@@ -92,8 +103,12 @@ func TestProxy_Add(t *testing.T) {
 	})
 
 	t.Run("remove disconnects and forgets the client", func(t *testing.T) {
-		recorder := &clientRecorder{}
-		p := newProxy(Handlers{}, recorder.newClient)
+		recorder := new(clientRecorder)
+		ctx := t.Context()
+		p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID("client-a")); err != nil {
 			t.Fatalf(`Add(client-a) error = %v, want nil`, err)
 		}
@@ -112,20 +127,27 @@ func TestProxy_Add(t *testing.T) {
 		}
 	})
 
-	t.Run("installs the proxy handlers on the options", func(t *testing.T) {
+	t.Run("installs the aggregator handlers on the options", func(t *testing.T) {
 		var (
 			onConnect, connectionLost, reconnecting, defaultPublish int
 			gotClient                                               mqtt.Client
 			gotErr                                                  error
+
+			ctx      = t.Context()
+			recorder = new(clientRecorder)
 		)
-		handlers := Handlers{
+		handlers := broker.Handlers{
 			OnConnect:      func(c mqtt.Client) { onConnect++; gotClient = c },
 			ConnectionLost: func(_ mqtt.Client, err error) { connectionLost++; gotErr = err },
 			Reconnecting:   func(mqtt.Client, *mqtt.ClientOptions) { reconnecting++ },
 			DefaultPublish: func(mqtt.Client, mqtt.Message) { defaultPublish++ },
+			NewClient:      recorder.newClient,
 		}
-		recorder := &clientRecorder{}
-		p := newProxy(handlers, recorder.newClient)
+
+		p, err := broker.New(ctx, 0, handlers)
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		overridden := false
 		options := mqtt.NewClientOptions().SetClientID("client-a")
@@ -142,7 +164,7 @@ func TestProxy_Add(t *testing.T) {
 		options.DefaultPublishHandler(client, nil)
 
 		if overridden {
-			t.Error("caller-set OnConnect handler was invoked, want it overridden by the proxy")
+			t.Error("caller-set OnConnect handler was invoked, want it overridden by the aggregator")
 		}
 		if onConnect != 1 || gotClient != mqtt.Client(client) {
 			t.Errorf("Handlers.OnConnect calls = %d with client %v, want 1 with the added client", onConnect, gotClient)
@@ -160,8 +182,12 @@ func TestProxy_Add(t *testing.T) {
 
 	t.Run("default options can be overridden and added", func(t *testing.T) {
 		onConnect := 0
-		recorder := &clientRecorder{}
-		p := newProxy(Handlers{OnConnect: func(mqtt.Client) { onConnect++ }}, recorder.newClient)
+		recorder := new(clientRecorder)
+		ctx := t.Context()
+		p, err := broker.New(ctx, 0, broker.Handlers{OnConnect: func(mqtt.Client) { onConnect++ }, NewClient: recorder.newClient})
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		options := p.Default()
 
@@ -204,13 +230,16 @@ func TestProxy_Add(t *testing.T) {
 			tokens = tokens[1:]
 			return token
 		}}
-		p := newProxy(Handlers{}, recorder.newClient)
+		ctx := t.Context()
+		p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+		if err != nil {
+			t.Fatal(err)
+		}
 
-		err := p.addAll(t.Context(),
+		if err := p.Add(t.Context(),
 			mqtt.NewClientOptions().SetClientID("client-a"),
 			mqtt.NewClientOptions().SetClientID("client-b"),
-		)
-		if !errors.Is(err, connectErr) {
+		); !errors.Is(err, connectErr) {
 			t.Fatalf("addAll(client-a, failing client-b) error = %v, want wrapped %v", err, connectErr)
 		}
 		if got := recorder.clients()[0].DisconnectCallCount(); got != 1 {
@@ -223,12 +252,15 @@ func TestProxy_Add(t *testing.T) {
 
 	t.Run("canceled context abandons the connection", func(t *testing.T) {
 		recorder := &clientRecorder{connectToken: func() mqtt.Token { return pendingToken() }}
-		p := newProxy(Handlers{}, recorder.newClient)
+		ctx := t.Context()
+		p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		err := p.Add(ctx, mqtt.NewClientOptions().SetClientID("client-a"))
-		if !errors.Is(err, context.Canceled) {
+		if err := p.Add(ctx, mqtt.NewClientOptions().SetClientID("client-a")); !errors.Is(err, context.Canceled) {
 			t.Fatalf("Add(client-a) error = %v, want wrapped %v", err, context.Canceled)
 		}
 		if got := maps.Collect(p.Clients()); len(got) != 0 {
@@ -244,9 +276,13 @@ func TestProxy_Add(t *testing.T) {
 	})
 }
 
-func TestProxy_ConcurrentUse(t *testing.T) {
-	recorder := &clientRecorder{}
-	p := newProxy(Handlers{}, recorder.newClient)
+func TestAggregator_ConcurrentUse(t *testing.T) {
+	recorder := new(clientRecorder)
+	ctx := t.Context()
+	p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var wg sync.WaitGroup
 	for i := range 8 {
@@ -271,11 +307,14 @@ func TestProxy_ConcurrentUse(t *testing.T) {
 	}
 }
 
-func TestProxy_SetDisconnectQuiesce(t *testing.T) {
+func TestAggregator_DisconnectQuiesce(t *testing.T) {
 	t.Run("configured quiesce reaches Disconnect", func(t *testing.T) {
-		recorder := &clientRecorder{}
-		p := newProxy(Handlers{}, recorder.newClient)
-		p.SetDisconnectQuiesce(2 * time.Second)
+		recorder := new(clientRecorder)
+		ctx := t.Context()
+		p, err := broker.New(ctx, 2*time.Second, broker.Handlers{NewClient: recorder.newClient})
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID("client-a")); err != nil {
 			t.Fatalf(`Add(client-a) error = %v, want nil`, err)
@@ -292,8 +331,12 @@ func TestProxy_SetDisconnectQuiesce(t *testing.T) {
 	})
 
 	t.Run("default is 250 milliseconds", func(t *testing.T) {
-		recorder := &clientRecorder{}
-		p := newProxy(Handlers{}, recorder.newClient)
+		recorder := new(clientRecorder)
+		ctx := t.Context()
+		p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID("client-a")); err != nil {
 			t.Fatalf(`Add(client-a) error = %v, want nil`, err)
@@ -306,9 +349,12 @@ func TestProxy_SetDisconnectQuiesce(t *testing.T) {
 	})
 
 	t.Run("negative durations clamp to zero", func(t *testing.T) {
-		recorder := &clientRecorder{}
-		p := newProxy(Handlers{}, recorder.newClient)
-		p.SetDisconnectQuiesce(-time.Second)
+		recorder := new(clientRecorder)
+		ctx := t.Context()
+		p, err := broker.New(ctx, -time.Second, broker.Handlers{NewClient: recorder.newClient})
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID("client-a")); err != nil {
 			t.Fatalf(`Add(client-a) error = %v, want nil`, err)
@@ -321,9 +367,13 @@ func TestProxy_SetDisconnectQuiesce(t *testing.T) {
 	})
 }
 
-func TestProxy_Close(t *testing.T) {
-	recorder := &clientRecorder{}
-	p := newProxy(Handlers{}, recorder.newClient)
+func TestAggregator_Close(t *testing.T) {
+	recorder := new(clientRecorder)
+	ctx := t.Context()
+	p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, clientID := range []string{"client-a", "client-b"} {
 		if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID(clientID)); err != nil {
 			t.Fatalf(`Add(%s) error = %v, want nil`, clientID, err)
@@ -360,7 +410,7 @@ func pendingToken() *fake.Token {
 	return token
 }
 
-// clientRecorder builds fake clients for newProxy injection and records every
+// clientRecorder builds fake clients for newAggregator injection and records every
 // client it creates, in creation order.
 type clientRecorder struct {
 	connectToken func() mqtt.Token
@@ -427,8 +477,12 @@ func tokenQueue(tokens ...mqtt.Token) func() mqtt.Token {
 // Hypothesis: Add dereferences options.ClientID without a nil check, so
 // Add(ctx, nil) panics instead of returning an error like the empty-id case.
 func TestAttack_AddNilOptions(t *testing.T) {
-	recorder := &clientRecorder{}
-	p := newProxy(Handlers{}, recorder.newClient)
+	recorder := new(clientRecorder)
+	ctx := t.Context()
+	p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -441,7 +495,7 @@ func TestAttack_AddNilOptions(t *testing.T) {
 }
 
 // Attack: context handling.
-// Hypothesis: Add's select (pool.go:90-100) races token.Done() against
+// Hypothesis: Add's connect wait races token.Done() against
 // ctx.Done(). When the connect token is already complete, both cases are
 // ready and Go picks one at random, so Add with an already-canceled context
 // nondeterministically returns nil and pools the client instead of failing.
@@ -452,9 +506,12 @@ func TestAttack_AddWithCanceledContextNeverSucceeds(t *testing.T) {
 	successes := 0
 	const attempts = 200
 	for i := range attempts {
-		recorder := &clientRecorder{}
-		p := newProxy(Handlers{}, recorder.newClient)
-		err := p.Add(ctx, mqtt.NewClientOptions().SetClientID("client-a"))
+		recorder := new(clientRecorder)
+		p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = p.Add(ctx, mqtt.NewClientOptions().SetClientID("client-a"))
 		if err == nil {
 			successes++
 			continue
@@ -469,10 +526,9 @@ func TestAttack_AddWithCanceledContextNeverSucceeds(t *testing.T) {
 }
 
 // Attack: state corruption on the failure path.
-// Hypothesis: Add replaces the pooled client and disconnects it BEFORE
-// connecting the new one (pool.go:81-87). When the new connect then fails or
-// is canceled, remove deletes the new entry too, so a failed replacement Add
-// destroys the healthy client that was already pooled under that id.
+// Hypothesis: when a replacement Add fails to connect or is canceled, the
+// failure cleanup destroys the healthy client that was already pooled under
+// that id instead of leaving it untouched.
 func TestAttack_FailedReplacementDestroysHealthyClient(t *testing.T) {
 	connectErr := errors.New("broker unreachable")
 	tests := []struct {
@@ -498,7 +554,11 @@ func TestAttack_FailedReplacementDestroysHealthyClient(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			recorder := &clientRecorder{connectToken: tokenQueue(completedToken(nil), tt.secondToken)}
-			p := newProxy(Handlers{}, recorder.newClient)
+			ctx := t.Context()
+			p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID("client-a")); err != nil {
 				t.Fatalf(`first Add(client-a) error = %v, want nil`, err)
@@ -519,13 +579,17 @@ func TestAttack_FailedReplacementDestroysHealthyClient(t *testing.T) {
 	}
 }
 
-// Robustness: the identity check in remove (pool.go:134) must keep a newer
-// entry when an older Add fails after being replaced. A slow failing Add
-// must not delete the client that displaced it.
+// Robustness: the failure cleanup must keep a newer entry when an older Add
+// fails after being replaced. A slow failing Add must not delete the client
+// that displaced it.
 func TestAttack_LateConnectFailureKeepsNewerClient(t *testing.T) {
 	slowToken, complete := controllableToken()
 	recorder := &clientRecorder{connectToken: tokenQueue(slowToken, completedToken(nil))}
-	p := newProxy(Handlers{}, recorder.newClient)
+	ctx := t.Context()
+	p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	firstAddErr := make(chan error, 1)
 	go func() {
@@ -558,8 +622,12 @@ func TestAttack_LateConnectFailureKeepsNewerClient(t *testing.T) {
 // one client pooled, never disconnected, and every displaced client
 // disconnected exactly once (by its replacement).
 func TestAttack_ConcurrentAddSameID(t *testing.T) {
-	recorder := &clientRecorder{}
-	p := newProxy(Handlers{}, recorder.newClient)
+	recorder := new(clientRecorder)
+	ctx := t.Context()
+	p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	const adds = 16
 	var wg sync.WaitGroup
@@ -603,8 +671,12 @@ func TestAttack_ConcurrentAddSameID(t *testing.T) {
 // Close succeeds and pools the client. This documents observed behavior; it
 // is not stated in the Close contract.
 func TestAttack_CloseSemantics(t *testing.T) {
-	recorder := &clientRecorder{}
-	p := newProxy(Handlers{}, recorder.newClient)
+	recorder := new(clientRecorder)
+	ctx := t.Context()
+	p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := p.Add(t.Context(), mqtt.NewClientOptions().SetClientID("client-a")); err != nil {
 		t.Fatalf(`Add(client-a) error = %v, want nil`, err)
 	}
@@ -628,8 +700,12 @@ func TestAttack_CloseSemantics(t *testing.T) {
 // after a final Close every client ever created must have been disconnected
 // at least once with the pool left empty (no leaked connections).
 func TestAttack_CloseRacingAdd(t *testing.T) {
-	recorder := &clientRecorder{}
-	p := newProxy(Handlers{}, recorder.newClient)
+	recorder := new(clientRecorder)
+	ctx := t.Context()
+	p, err := broker.New(ctx, 0, broker.Handlers{NewClient: recorder.newClient})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var wg sync.WaitGroup
 	for i := range 4 {
